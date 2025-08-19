@@ -1,6 +1,6 @@
 import sys
 import os
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 import torch
 import numpy as np
@@ -180,6 +180,30 @@ class USDJPYTradingSystem:
         finally:
             if self.ibkr.connected:
                 self.ibkr.disconnect()
+                
+    def generate_signal_with_learning(self):
+        """Generate signal and log for continuous learning"""
+        signal, confidence, current_price, atr_value, df = self.generate_signal()
+        
+        if signal is None:
+            return None, None, None, None, None
+        
+        # Wait 4 hours, then check if prediction was correct
+        # (This would be called periodically)
+        
+        return signal, confidence, current_price, atr_value, df
+
+    def log_prediction_outcome_after_4h(self, original_signal, original_confidence, original_price, current_price, market_context):
+        """Check if our 4-hour prediction was correct"""
+        actual_outcome = 1 if current_price > original_price else 0
+        
+        # Log the outcome for learning
+        self.continuous_learner.log_prediction_outcome(
+            original_confidence, 
+            actual_outcome,
+            market_context,
+            None  # No trade details yet
+        )
 
 # Example usage
 if __name__ == "__main__":

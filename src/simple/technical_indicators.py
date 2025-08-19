@@ -1,6 +1,6 @@
 import sys
 import os
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 import pandas as pd
 import numpy as np
@@ -46,13 +46,18 @@ class TechnicalIndicators:
         return tr.rolling(window=period).mean()
 
     def add_all_indicators(self, df):
-        """Add all technical indicators to dataframe"""
+        """Add core technical indicators for simple model"""
+        # RSI
         df['rsi'] = self.rsi(df['close'])
-        df['macd'], df['macd_signal'], df['macd_histogram'] = self.macd(df['close'])
-        df['bb_upper'], df['bb_middle'], df['bb_lower'] = self.bollinger_bands(df['close'])
-        df['atr'] = self.atr(df['high'], df['low'], df['close'])
         
-        # Price position within Bollinger Bands
+        # MACD
+        df['macd'], df['macd_signal'], _ = self.macd(df['close'])
+        
+        # Bollinger Bands
+        df['bb_upper'], df['bb_middle'], df['bb_lower'] = self.bollinger_bands(df['close'])
         df['bb_position'] = (df['close'] - df['bb_lower']) / (df['bb_upper'] - df['bb_lower'])
+        
+        # ATR
+        df['atr'] = self.atr(df['high'], df['low'], df['close'])
         
         return df

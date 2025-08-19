@@ -1,12 +1,12 @@
 import sys
 import os
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from data_processor import DataProcessor
 from lstm_model import USDJPYLSTMModel, ModelTrainer
 import torch
 import numpy as np
-from config.model_config import MODEL_PATH
+from config.model_config import LEARNING_RATE, BATCH_SIZE, EPOCHS, MODEL_PATH, SCALER_PATH
 
 def main():
     print("Starting USD/JPY LSTM Model Training...")

@@ -1,6 +1,6 @@
 import sys
 import os
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 import torch
 import torch.nn as nn
@@ -8,9 +8,46 @@ import numpy as np
 from sklearn.preprocessing import MinMaxScaler
 import pickle
 from config.model_config import *
-from config.trading_config import *
 
 class USDJPYLSTMModel(nn.Module):
+    def __init__(self, input_size=INPUT_SIZE, hidden_size=HIDDEN_SIZE, 
+                 num_layers=NUM_LAYERS, output_size=OUTPUT_SIZE):
+        super(USDJPYLSTMModel, self).__init__()
+        self.hidden_size = hidden_size
+        self.num_layers = num_layers
+        
+        # IMPROVED ARCHITECTURE
+        self.lstm = nn.LSTM(input_size, hidden_size, num_layers, 
+                           batch_first=True, dropout=DROPOUT, bidirectional=True)
+        
+        # Bidirectional doubles the output size
+        lstm_output_size = hidden_size * 2
+        
+        # Multi-layer classifier
+        self.classifier = nn.Sequential(
+            nn.Linear(lstm_output_size, hidden_size),
+            nn.ReLU(),
+            nn.Dropout(DROPOUT),
+            nn.Linear(hidden_size, hidden_size // 2),
+            nn.ReLU(), 
+            nn.Dropout(DROPOUT),
+            nn.Linear(hidden_size // 2, output_size),
+            nn.Sigmoid()
+        )
+        
+    def forward(self, x):
+        batch_size = x.size(0)
+        
+        # Initialize hidden states for bidirectional LSTM
+        h0 = torch.zeros(self.num_layers * 2, batch_size, self.hidden_size)
+        c0 = torch.zeros(self.num_layers * 2, batch_size, self.hidden_size)
+        
+        lstm_out, _ = self.lstm(x, (h0, c0))
+        
+        # Use the last output
+        output = self.classifier(lstm_out[:, -1, :])
+        return output
+
     def __init__(self, input_size=INPUT_SIZE, hidden_size=HIDDEN_SIZE, 
                  num_layers=NUM_LAYERS, output_size=OUTPUT_SIZE):
         super(USDJPYLSTMModel, self).__init__()
@@ -89,9 +126,9 @@ class ModelTrainer:
                 print(f'Epoch [{epoch}/{epochs}], Loss: {loss.item():.4f}')
     
     def save_scaler(self):
-        with open(SCALER_PATH, 'wb') as f:
+        with open(MODEL_PATH, 'wb') as f:
             pickle.dump(self.scaler, f)
     
     def load_scaler(self):
-        with open(SCALER_PATH, 'rb') as f:
+        with open(MODEL_PATH, 'rb') as f:
             self.scaler = pickle.load(f)
