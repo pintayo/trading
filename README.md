@@ -1,0 +1,1 @@
+tree -I "venv" to show tree view without venv folder

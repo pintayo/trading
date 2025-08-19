@@ -1,9 +1,12 @@
 import pandas as pd
 import numpy as np
+from config.model_config import INDICATORS
 
 class TechnicalIndicators:
+    
     @staticmethod
-    def rsi(data, period=14):
+    def rsi(data, period=INDICATORS["rsi_period"]):
+        """Relative Strength Index"""
         delta = data.diff()
         gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
         loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
@@ -11,15 +14,18 @@ class TechnicalIndicators:
         return 100 - (100 / (1 + rs))
     
     @staticmethod
-    def macd(data, fast=12, slow=26, signal=9):
+    def macd(data, fast=INDICATORS["macd_fast"], slow=INDICATORS["macd_slow"], signal=INDICATORS["macd_signal"]):
+        """MACD Indicator"""
         ema_fast = data.ewm(span=fast).mean()
         ema_slow = data.ewm(span=slow).mean()
         macd_line = ema_fast - ema_slow
         signal_line = macd_line.ewm(span=signal).mean()
-        return macd_line, signal_line
+        histogram = macd_line - signal_line
+        return macd_line, signal_line, histogram
     
     @staticmethod
-    def bollinger_bands(data, period=20, std=2):
+    def bollinger_bands(data, period=INDICATORS["bb_period"], std=INDICATORS["bb_std"]):
+        """Bollinger Bands"""
         sma = data.rolling(window=period).mean()
         std_dev = data.rolling(window=period).std()
         upper = sma + (std_dev * std)
@@ -27,7 +33,8 @@ class TechnicalIndicators:
         return upper, sma, lower
     
     @staticmethod
-    def atr(high, low, close, period=14):
+    def atr(high, low, close, period=INDICATORS["atr_period"]):
+        """Average True Range"""
         tr1 = high - low
         tr2 = abs(high - close.shift())
         tr3 = abs(low - close.shift())
@@ -35,8 +42,13 @@ class TechnicalIndicators:
         return tr.rolling(window=period).mean()
 
     def add_all_indicators(self, df):
+        """Add all technical indicators to dataframe"""
         df['rsi'] = self.rsi(df['close'])
-        df['macd'], df['macd_signal'] = self.macd(df['close'])
+        df['macd'], df['macd_signal'], df['macd_histogram'] = self.macd(df['close'])
         df['bb_upper'], df['bb_middle'], df['bb_lower'] = self.bollinger_bands(df['close'])
         df['atr'] = self.atr(df['high'], df['low'], df['close'])
+        
+        # Price position within Bollinger Bands
+        df['bb_position'] = (df['close'] - df['bb_lower']) / (df['bb_upper'] - df['bb_lower'])
+        
         return df

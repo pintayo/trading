@@ -2,41 +2,65 @@ import torch
 import torch.nn as nn
 import numpy as np
 from sklearn.preprocessing import MinMaxScaler
+import pickle
+from config.model_config import *
 
 class USDJPYLSTMModel(nn.Module):
-    def __init__(self, input_size=12, hidden_size=50, num_layers=2, output_size=1):
+    def __init__(self, input_size=INPUT_SIZE, hidden_size=HIDDEN_SIZE, 
+                 num_layers=NUM_LAYERS, output_size=OUTPUT_SIZE):
         super(USDJPYLSTMModel, self).__init__()
         self.hidden_size = hidden_size
         self.num_layers = num_layers
         
-        self.lstm = nn.LSTM(input_size, hidden_size, num_layers, batch_first=True)
-        self.fc = nn.Linear(hidden_size, output_size)
+        self.lstm = nn.LSTM(input_size, hidden_size, num_layers, 
+                           batch_first=True, dropout=DROPOUT)
+        self.fc1 = nn.Linear(hidden_size, hidden_size // 2)
+        self.fc2 = nn.Linear(hidden_size // 2, output_size)
+        self.relu = nn.ReLU()
         self.sigmoid = nn.Sigmoid()
+        self.dropout = nn.Dropout(DROPOUT)
         
     def forward(self, x):
         h0 = torch.zeros(self.num_layers, x.size(0), self.hidden_size)
         c0 = torch.zeros(self.num_layers, x.size(0), self.hidden_size)
         
         lstm_out, _ = self.lstm(x, (h0, c0))
-        output = self.fc(lstm_out[:, -1, :])
-        return self.sigmoid(output)
+        x = self.dropout(lstm_out[:, -1, :])
+        x = self.relu(self.fc1(x))
+        x = self.dropout(x)
+        output = self.sigmoid(self.fc2(x))
+        return output
 
 class ModelTrainer:
-    def __init__(self, model, learning_rate=0.001):
-        self.model = model
-        self.optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+    def __init__(self, model=None, learning_rate=LEARNING_RATE):
+        self.model = model or USDJPYLSTMModel()
+        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=learning_rate)
         self.criterion = nn.BCELoss()
         self.scaler = MinMaxScaler()
         
-    def prepare_sequences(self, features, targets, sequence_length=24):  # 24 = 4 days of 4-hour data
+    def prepare_sequences(self, features, targets, sequence_length=SEQUENCE_LENGTH):
         X, y = [], []
         for i in range(len(features) - sequence_length):
             X.append(features[i:(i + sequence_length)])
             y.append(targets[i + sequence_length])
         return np.array(X), np.array(y)
     
-    def train(self, X_train, y_train, epochs=100):
+    def split_data(self, X, y):
+        """Split data into train/validation/test sets"""
+        n = len(X)
+        train_end = int(n * TRAIN_SPLIT)
+        val_end = int(n * (TRAIN_SPLIT + VALIDATION_SPLIT))
+        
+        X_train, y_train = X[:train_end], y[:train_end]
+        X_val, y_val = X[train_end:val_end], y[train_end:val_end]
+        X_test, y_test = X[val_end:], y[val_end:]
+        
+        return (X_train, y_train), (X_val, y_val), (X_test, y_test)
+    
+    def train(self, X_train, y_train, X_val=None, y_val=None, epochs=EPOCHS):
         self.model.train()
+        best_val_loss = float('inf')
+        
         for epoch in range(epochs):
             self.optimizer.zero_grad()
             outputs = self.model(X_train)
@@ -44,5 +68,25 @@ class ModelTrainer:
             loss.backward()
             self.optimizer.step()
             
-            if epoch % 20 == 0:
+            if X_val is not None and epoch % 10 == 0:
+                self.model.eval()
+                with torch.no_grad():
+                    val_outputs = self.model(X_val)
+                    val_loss = self.criterion(val_outputs.squeeze(), y_val.float())
+                    
+                    if val_loss < best_val_loss:
+                        best_val_loss = val_loss
+                        torch.save(self.model.state_dict(), MODEL_PATH)
+                        
+                self.model.train()
+                print(f'Epoch [{epoch}/{epochs}], Loss: {loss.item():.4f}, Val Loss: {val_loss.item():.4f}')
+            elif epoch % 20 == 0:
                 print(f'Epoch [{epoch}/{epochs}], Loss: {loss.item():.4f}')
+    
+    def save_scaler(self):
+        with open(SCALER_PATH, 'wb') as f:
+            pickle.dump(self.scaler, f)
+    
+    def load_scaler(self):
+        with open(SCALER_PATH, 'rb') as f:
+            self.scaler = pickle.load(f)
