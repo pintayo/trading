@@ -1,3 +1,7 @@
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import pandas as pd
 import sqlite3
 from technical_indicators import TechnicalIndicators
@@ -9,11 +13,51 @@ class DataProcessor:
     
     def load_data(self):
         conn = sqlite3.connect(self.db_path)
-        df = pd.read_sql_query("SELECT * FROM price_data", conn, parse_dates=True, index_col=0)
+        df = pd.read_sql_query("SELECT * FROM price_data", conn)
         conn.close()
         
-        # Handle potential column naming issues
-        df.columns = df.columns.str.lower()
+        print("Columns in database:", df.columns.tolist())
+        print("First few rows:")
+        print(df.head())
+        
+        # Handle different possible column structures
+        if 'Datetime' in df.columns:
+            df['Datetime'] = pd.to_datetime(df['Datetime'])
+            df.set_index('Datetime', inplace=True)
+        elif 'timestamp' in df.columns:
+            df['timestamp'] = pd.to_datetime(df['timestamp'])
+            df.set_index('timestamp', inplace=True)
+        elif 'index' in df.columns:
+            df['index'] = pd.to_datetime(df['index'])
+            df.set_index('index', inplace=True)
+        else:
+            # If no clear datetime column, use the first column as datetime index
+            datetime_col = df.columns[0]
+            df[datetime_col] = pd.to_datetime(df[datetime_col])
+            df.set_index(datetime_col, inplace=True)
+        
+        # Handle multi-level column names like ('Close', 'USDJPY=X')
+        if any(isinstance(col, tuple) or '(' in str(col) for col in df.columns):
+            # Clean up column names - extract just the price type
+            new_columns = []
+            for col in df.columns:
+                if isinstance(col, tuple):
+                    new_columns.append(col[0].lower())
+                elif '(' in str(col) and ')' in str(col):
+                    # Extract the first part from strings like "('Close', 'USDJPY=X')"
+                    clean_col = str(col).split(',').replace('(', '').replace("'", '').strip().lower()
+                    new_columns.append(clean_col)
+                else:
+                    new_columns.append(str(col).lower())
+            
+            df.columns = new_columns
+        else:
+            # Simple column name cleanup
+            df.columns = df.columns.str.lower()
+        
+        print("Final columns after processing:", df.columns.tolist())
+        print("Index name:", df.index.name)
+        print("Data shape:", df.shape)
         
         return df
     

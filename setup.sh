@@ -11,6 +11,11 @@ pip install -r requirements.txt
 # Create necessary directories
 mkdir -p data models logs notebooks
 
+# Create __init__.py files for proper Python packages
+touch __init__.py
+touch config/__init__.py
+touch src/__init__.py
+
 # Create .env file for IBKR credentials
 touch .env
 

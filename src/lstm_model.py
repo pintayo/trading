@@ -1,9 +1,14 @@
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import torch
 import torch.nn as nn
 import numpy as np
 from sklearn.preprocessing import MinMaxScaler
 import pickle
 from config.model_config import *
+from config.trading_config import *
 
 class USDJPYLSTMModel(nn.Module):
     def __init__(self, input_size=INPUT_SIZE, hidden_size=HIDDEN_SIZE, 
