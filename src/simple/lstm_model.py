@@ -48,31 +48,6 @@ class USDJPYLSTMModel(nn.Module):
         output = self.classifier(lstm_out[:, -1, :])
         return output
 
-    def __init__(self, input_size=INPUT_SIZE, hidden_size=HIDDEN_SIZE, 
-                 num_layers=NUM_LAYERS, output_size=OUTPUT_SIZE):
-        super(USDJPYLSTMModel, self).__init__()
-        self.hidden_size = hidden_size
-        self.num_layers = num_layers
-        
-        self.lstm = nn.LSTM(input_size, hidden_size, num_layers, 
-                           batch_first=True, dropout=DROPOUT)
-        self.fc1 = nn.Linear(hidden_size, hidden_size // 2)
-        self.fc2 = nn.Linear(hidden_size // 2, output_size)
-        self.relu = nn.ReLU()
-        self.sigmoid = nn.Sigmoid()
-        self.dropout = nn.Dropout(DROPOUT)
-        
-    def forward(self, x):
-        h0 = torch.zeros(self.num_layers, x.size(0), self.hidden_size)
-        c0 = torch.zeros(self.num_layers, x.size(0), self.hidden_size)
-        
-        lstm_out, _ = self.lstm(x, (h0, c0))
-        x = self.dropout(lstm_out[:, -1, :])
-        x = self.relu(self.fc1(x))
-        x = self.dropout(x)
-        output = self.sigmoid(self.fc2(x))
-        return output
-
 class ModelTrainer:
     def __init__(self, model=None, learning_rate=LEARNING_RATE):
         self.model = model or USDJPYLSTMModel()
@@ -102,6 +77,7 @@ class ModelTrainer:
     def train(self, X_train, y_train, X_val=None, y_val=None, epochs=EPOCHS):
         self.model.train()
         best_val_loss = float('inf')
+        patience_counter = 0 # Initialize patience counter
         
         for epoch in range(epochs):
             self.optimizer.zero_grad()
@@ -110,7 +86,7 @@ class ModelTrainer:
             loss.backward()
             self.optimizer.step()
             
-            if X_val is not None and epoch % 10 == 0:
+            if X_val is not None:
                 self.model.eval()
                 with torch.no_grad():
                     val_outputs = self.model(X_val)
@@ -119,16 +95,24 @@ class ModelTrainer:
                     if val_loss < best_val_loss:
                         best_val_loss = val_loss
                         torch.save(self.model.state_dict(), MODEL_PATH)
+                        patience_counter = 0 # Reset patience if validation loss improves
+                    else:
+                        patience_counter += 1 # Increment patience if no improvement
+                        
+                    if patience_counter >= PATIENCE: # Check for early stopping
+                        print(f"Early stopping at epoch {epoch} due to no improvement in validation loss.")
+                        break
                         
                 self.model.train()
-                print(f'Epoch [{epoch}/{epochs}], Loss: {loss.item():.4f}, Val Loss: {val_loss.item():.4f}')
+                if epoch % 10 == 0: # Print every 10 epochs
+                    print(f'Epoch [{epoch}/{epochs}], Loss: {loss.item():.4f}, Val Loss: {val_loss.item():.4f}')
             elif epoch % 20 == 0:
                 print(f'Epoch [{epoch}/{epochs}], Loss: {loss.item():.4f}')
     
     def save_scaler(self):
-        with open(MODEL_PATH, 'wb') as f:
+        with open(SCALER_PATH, 'wb') as f:
             pickle.dump(self.scaler, f)
     
     def load_scaler(self):
-        with open(MODEL_PATH, 'rb') as f:
+        with open(SCALER_PATH, 'rb') as f:
             self.scaler = pickle.load(f)

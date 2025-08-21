@@ -7,92 +7,120 @@ import numpy as np
 import pandas as pd
 from datetime import datetime, timedelta
 import time
-from lstm_model import USDJPYLSTMModel, ModelTrainer
-from data_processor import DataProcessor
+from ensemble_model import EnsembleForexModel
+from advanced_features import AdvancedFeatureEngineering
 from ibkr_integration import IBKRTrading
 from trade_logger import TradeLogger
-from technical_indicators import TechnicalIndicators
-from config.model_config import MODEL_PATH, SCALER_PATH
 from config.trading_config import *
+from config.model_config import SEQUENCE_LENGTH
 
 class USDJPYTradingSystem:
     def __init__(self, account_balance=1000, paper_trading=True):
-        self.model = USDJPYLSTMModel()
-        self.model.load_state_dict(torch.load(MODEL_PATH))
-        self.model.eval()
-        
-        self.trainer = ModelTrainer()
-        self.trainer.load_scaler()
+        self.model = EnsembleForexModel()
+        self.model.load_model() # Ensemble model handles its own loading
         
         self.ibkr = IBKRTrading(account_balance, paper_trading)
         self.trade_logger = TradeLogger()
-        self.indicators = TechnicalIndicators()
+        self.feature_engineer = AdvancedFeatureEngineering()
         
         self.last_signal_time = None
         self.position_open = False
         
     def get_latest_data(self):
-        """Get latest market data and calculate features"""
+        """Get latest market data and calculate advanced features"""
         if not self.ibkr.connected:
             if not self.ibkr.connect():
                 raise ConnectionError("Cannot connect to IBKR")
         
         contract = self.ibkr.create_forex_contract()
         
-        # Get recent 4-hour data
-        df = self.ibkr.get_historical_data(contract, duration="10 D", barSize="4 hours")
+        # Get recent 4-hour data (more data for advanced features)
+        df = self.ibkr.get_historical_data(contract, duration="30 D", barSize="4 hours")
         
         if df.empty:
             raise ValueError("No historical data received")
         
-        # Add technical indicators
-        df = self.indicators.add_all_indicators(df)
+        # Create advanced features
+        df = self.feature_engineer.create_advanced_features(df.copy())
         
-        # Add additional features
-        df['price_change'] = df['close'].pct_change()
-        df['volatility'] = df['price_change'].rolling(window=12).std()
+        # Select only the features the ensemble model was trained on
+        # This assumes self.model.selected_features is populated after load_model()
+        if self.model.selected_features is None:
+            raise ValueError("Ensemble model's selected_features not loaded. Ensure model is trained and saved correctly.")
         
-        return df.dropna()
+        # Ensure the DataFrame has enough rows after feature engineering and dropping NaNs
+        # The feature engineering process might introduce NaNs at the beginning.
+        # We need enough data points to form the required sequence_length for LSTM inputs.
+        df = df.dropna()
+        
+        return df[self.model.selected_features]
     
-    def prepare_model_input(self, df):
-        """Prepare data for model prediction"""
-        feature_cols = [
-            'open', 'high', 'low', 'close', 'volume',
-            'rsi', 'macd', 'macd_signal', 'bb_upper', 'bb_middle', 'bb_lower',
-            'atr', 'bb_position', 'price_change', 'volatility'
-        ]
+    def prepare_ensemble_inputs(self, df):
+        """Prepare data for ensemble model prediction (LSTM and XGBoost parts)"""
+        features = df.values
         
-        # Get last SEQUENCE_LENGTH periods
-        features = df[feature_cols].tail(SEQUENCE_LENGTH).values
+        # Prepare LSTM data
+        lstm_X = []
+        if len(features) >= SEQUENCE_LENGTH:
+            lstm_X.append(features[-SEQUENCE_LENGTH:])
+        else:
+            raise ValueError(f"Insufficient data for LSTM sequence. Need at least {SEQUENCE_LENGTH} data points, got {len(features)}.")
+        lstm_X = np.array(lstm_X)
         
-        # Normalize using saved scaler
-        features_scaled = self.trainer.scaler.transform(features.reshape(1, -1))
-        features_scaled = features_scaled.reshape(1, SEQUENCE_LENGTH, len(feature_cols))
+        # Prepare XGBoost data (last 12 periods flattened)
+        xgb_X = []
+        if len(features) >= 12: # XGBoost uses last 12 periods
+            xgb_X.append(features[-12:].flatten())
+        else:
+            raise ValueError(f"Insufficient data for XGBoost input. Need at least 12 data points, got {len(features)}.")
+        xgb_X = np.array(xgb_X)
         
-        return torch.FloatTensor(features_scaled)
+        return torch.FloatTensor(lstm_X), xgb_X
     
     def generate_signal(self):
-        """Generate trading signal from AI model"""
+        """Generate trading signal from AI ensemble model"""
         try:
-            # Get latest data
+            # Get latest data with advanced features
             df = self.get_latest_data()
             
-            if len(df) < SEQUENCE_LENGTH:
-                print("Insufficient data for prediction")
-                return None, None, None
+            # Ensure enough data for both LSTM and XGBoost inputs
+            if len(df) < max(SEQUENCE_LENGTH, 12): # Assuming XGBoost needs at least 12
+                print("Insufficient data for ensemble prediction.")
+                return None, None, None, None, None
             
-            # Prepare input for model
-            model_input = self.prepare_model_input(df)
+            # Prepare inputs for ensemble model
+            lstm_input, xgb_input = self.prepare_ensemble_inputs(df)
             
             # Generate prediction
             with torch.no_grad():
-                prediction = self.model(model_input)
-                signal = prediction.item()
+                prediction = self.model.predict(lstm_input, xgb_input)
+                signal = prediction.item() # Ensemble predict returns a single value
                 confidence = abs(signal - 0.5) * 2  # Convert to confidence score
             
-            # Get current price and ATR
-            current_price = df['close'].iloc[-1]
-            atr_value = df['atr'].iloc[-1]
+            # Get current price and ATR from the original (un-engineered) data
+            # Need to fetch raw data again or pass it through
+            # For simplicity, let's assume the last row of the feature-engineered df still corresponds to current price/ATR
+            # A more robust solution would pass original OHLCV data alongside engineered features.
+            # For now, we'll get it from the raw historical data before feature engineering.
+            
+            # Re-fetch raw data to get current price and ATR
+            contract = self.ibkr.create_forex_contract()
+            raw_df = self.ibkr.get_historical_data(contract, duration="1 D", barSize="4 hours")
+            raw_df = raw_df.dropna()
+            
+            if raw_df.empty:
+                print("Could not get raw data for current price/ATR.")
+                return None, None, None, None, None
+            
+            current_price = raw_df['close'].iloc[-1]
+            
+            # Recalculate ATR on raw data for consistency with risk manager
+            # This is a simplified approach; ideally, ATR would be part of the selected features
+            # and passed through. For now, we'll use the simple TechnicalIndicators class.
+            from technical_indicators import TechnicalIndicators # Import locally to avoid circular dependency
+            ti = TechnicalIndicators()
+            raw_df = ti.add_all_indicators(raw_df)
+            atr_value = raw_df['atr'].iloc[-1]
             
             print(f"AI Signal: {signal:.3f}, Confidence: {confidence:.3f}")
             print(f"Current Price: {current_price:.3f}, ATR: {atr_value:.3f}")
@@ -116,6 +144,8 @@ class USDJPYTradingSystem:
         # Strong sell signal  
         if signal < 0.4:
             return True, "Strong sell signal"
+        
+        return False, "Strong sell signal" # Corrected typo
         
         return False, "Signal not strong enough"
     
@@ -192,18 +222,6 @@ class USDJPYTradingSystem:
         # (This would be called periodically)
         
         return signal, confidence, current_price, atr_value, df
-
-    def log_prediction_outcome_after_4h(self, original_signal, original_confidence, original_price, current_price, market_context):
-        """Check if our 4-hour prediction was correct"""
-        actual_outcome = 1 if current_price > original_price else 0
-        
-        # Log the outcome for learning
-        self.continuous_learner.log_prediction_outcome(
-            original_confidence, 
-            actual_outcome,
-            market_context,
-            None  # No trade details yet
-        )
 
 # Example usage
 if __name__ == "__main__":

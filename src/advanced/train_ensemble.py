@@ -4,6 +4,8 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(
 
 from data_processor import DataProcessor
 from ensemble_model import EnsembleForexModel
+from config.model_config import TARGET_PERCENT_THRESHOLD, TARGET_FUTURE_CANDLES
+import numpy as np
 
 def main():
     print("Starting Advanced Ensemble Training for 70% Accuracy Target...")
@@ -12,13 +14,28 @@ def main():
     processor = DataProcessor()
     df = processor.load_data()
     
-    # Create target variable (1 if price goes up in next 4 hours, 0 if down)
-    df['target'] = (df['close'].shift(-1) > df['close']).astype(int)
+    # --- Refined Target Variable Definition (copied from simple/data_processor.py) ---
+    # Calculate future close price
+    df['future_close'] = df['close'].shift(-TARGET_FUTURE_CANDLES)
     
-    # Remove NaN values
-    df = df.dropna()
+    # Define thresholds
+    upper_bound = df['close'] * (1 + TARGET_PERCENT_THRESHOLD)
+    lower_bound = df['close'] * (1 - TARGET_PERCENT_THRESHOLD)
     
-    print(f"Dataset size: {len(df)} samples")
+    # Assign target: 1 for up, 0 for down
+    df['target'] = np.nan # Initialize with NaN
+    df.loc[df['future_close'] >= upper_bound, 'target'] = 1
+    df.loc[df['future_close'] <= lower_bound, 'target'] = 0
+    
+    # Drop rows where target is NaN (i.e., price stayed within the threshold)
+    df = df.dropna(subset=['target'])
+    df['target'] = df['target'].astype(int)
+    # --- End Refined Target Variable Definition ---
+    
+    # Remove NaN values that might have been introduced by feature engineering later
+    # (This is handled by ensemble_model.py's feature engineering)
+    
+    print(f"Dataset size after target definition: {len(df)} samples")
     
     # Initialize and train ensemble model
     ensemble_model = EnsembleForexModel()

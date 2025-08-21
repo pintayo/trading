@@ -31,9 +31,10 @@ class IBKRTrading:
             print(f"Failed to connect to IBKR: {e}")
             return False
     
-    def create_forex_contract(self, symbol="USD", currency="JPY"):
-        """Create forex contract for USD/JPY"""
-        contract = Forex(symbol, currency)
+    def create_forex_contract(self):
+        """Create forex contract for USD/JPY using config values"""
+        contract = Forex(symbol=IBKR_SYMBOL, currency=IBKR_CURRENCY, exchange=IBKR_EXCHANGE)
+        print(f"DEBUG: Created contract: {contract}")
         return contract
     
     def get_current_price(self, contract):
@@ -49,15 +50,39 @@ class IBKRTrading:
     
     def get_historical_data(self, contract, duration="1 D", barSize="4 hours"):
         """Get historical data for analysis"""
-        bars = self.ib.reqHistoricalData(
-            contract,
-            endDateTime='',
-            durationStr=duration,
-            barSizeSetting=barSize,
-            whatToShow='MIDPOINT',
-            useRTH=True
-        )
+        try:
+            # Use a specific endDateTime to avoid potential issues with empty string
+            # Request a shorter duration and different bar size for testing
+            end_date_time = self.ib.reqCurrentTime().strftime('%Y%m%d %H:%M:%S')
+            bars = self.ib.reqHistoricalData(
+                contract,
+                endDateTime=end_date_time,
+                durationStr="10 D", # Request 10 days of data
+                barSizeSetting="4 hours", # Request 4 hour bars
+                whatToShow='MIDPOINT',
+                useRTH=True
+            )
+        except Exception as e:
+            print(f"Error requesting historical data: {type(e).__name__}: {e}")
+            return pd.DataFrame() # Return empty DataFrame on error
         
+        if not bars:
+            return pd.DataFrame() # Return empty DataFrame if no bars received
+        
+        # Check for errors within the bars object
+        for bar in bars:
+            if hasattr(bar, 'error') and bar.error:
+                print(f"IBKR Historical Data Error: {bar.error}")
+                return pd.DataFrame() # Return empty DataFrame if error found
+
+        print(f"DEBUG: Bars object received: {bars}") # Added debug print
+        print(f"DEBUG: Type of bars: {type(bars)}")
+        print(f"DEBUG: Length of bars: {len(bars)}")
+        if len(bars) > 0:
+            print(f"DEBUG: First bar: {repr(bars[0])}")
+            if len(bars) > 1:
+                print(f"DEBUG: Second bar: {repr(bars[1])}")
+
         df = util.df(bars)
         return df
     

@@ -3,8 +3,10 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 import pandas as pd
+import numpy as np
 import sqlite3
 from technical_indicators import TechnicalIndicators
+from config.model_config import TARGET_PERCENT_THRESHOLD, TARGET_FUTURE_CANDLES
 
 class DataProcessor:
     """Simplified data processor for profitable 52%+ model"""
@@ -41,18 +43,47 @@ class DataProcessor:
         # Add core technical indicators
         df = self.indicators.add_all_indicators(df)
         
-        # Create target (1 = price up in 4 hours, 0 = price down)
-        df['target'] = (df['close'].shift(-1) > df['close']).astype(int)
+        # --- NEW TARGET VARIABLE DEFINITION ---
+        # Calculate future close price
+        df['future_close'] = df['close'].shift(-TARGET_FUTURE_CANDLES)
+        
+        # Define thresholds
+        upper_bound = df['close'] * (1 + TARGET_PERCENT_THRESHOLD)
+        lower_bound = df['close'] * (1 - TARGET_PERCENT_THRESHOLD)
+        
+        # Assign target: 1 for up, 0 for down
+        df['target'] = np.nan # Initialize with NaN
+        df.loc[df['future_close'] >= upper_bound, 'target'] = 1
+        df.loc[df['future_close'] <= lower_bound, 'target'] = 0
+        
+        # Drop rows where target is NaN (i.e., price stayed within the threshold)
+        df = df.dropna(subset=['target'])
+        df['target'] = df['target'].astype(int)
+        # --- END NEW TARGET VARIABLE DEFINITION ---
         
         # Add simple derived features
         df['price_change'] = df['close'].pct_change()
         df['volatility'] = df['price_change'].rolling(12).std()
         df['rsi_momentum'] = df['rsi'].diff()
         
-        # Clean data
+        # --- NEW FEATURES FOR IMPROVED ACCURACY ---
+        # Lagged Price Features
+        df['close_lag_1'] = df['close'].shift(1)
+        df['close_lag_2'] = df['close'].shift(2)
+        df['close_lag_3'] = df['close'].shift(3)
+        
+        # Volume-Based Indicator (On-Balance Volume)
+        df['obv'] = (np.sign(df['close'].diff()) * df['volume']).fillna(0).cumsum()
+        
+        # Additional Volatility Measures
+        df['rolling_std_7'] = df['close'].rolling(window=7).std()
+        df['rolling_std_21'] = df['close'].rolling(window=21).std()
+        # --- END NEW FEATURES ---
+
+        # Clean data (after target definition and new features)
         df = df.dropna()
         
-        # SIMPLE FEATURE SET (16 features - proven effective)
+        # SIMPLE FEATURE SET (now with more features)
         feature_cols = [
             # Price data (5 features)
             'open', 'high', 'low', 'close', 'volume',
@@ -63,7 +94,13 @@ class DataProcessor:
             'atr', 'bb_position',
             
             # Simple derived features (3 features)
-            'price_change', 'volatility', 'rsi_momentum'
+            'price_change', 'volatility', 'rsi_momentum',
+            
+            # --- NEW FEATURES ADDED ---
+            'close_lag_1', 'close_lag_2', 'close_lag_3',
+            'obv',
+            'rolling_std_7', 'rolling_std_21'
+            # --- END NEW FEATURES ---
         ]
         
         # Verify all features exist
@@ -93,7 +130,7 @@ class DataProcessor:
         return list(df.columns)
 
 if __name__ == "__main__":
-    processor = SimpleDataProcessor()
+    processor = DataProcessor()
     
     # Debug: show available features
     available_features = processor.get_feature_info()

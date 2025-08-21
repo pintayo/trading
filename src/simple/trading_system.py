@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 from datetime import datetime, timedelta
 import time
+import traceback
 from lstm_model import USDJPYLSTMModel, ModelTrainer
 from data_processor import DataProcessor
 from ibkr_integration import IBKRTrading
@@ -18,7 +19,7 @@ from config.trading_config import *
 class USDJPYTradingSystem:
     def __init__(self, account_balance=1000, paper_trading=True):
         self.model = USDJPYLSTMModel()
-        self.model.load_state_dict(torch.load(MODEL_PATH))
+        self.model.load_state_dict(torch.load(MODEL_PATH, weights_only=False))
         self.model.eval()
         
         self.trainer = ModelTrainer()
@@ -39,8 +40,8 @@ class USDJPYTradingSystem:
         
         contract = self.ibkr.create_forex_contract()
         
-        # Get recent 4-hour data
-        df = self.ibkr.get_historical_data(contract, duration="10 D", barSize="4 hours")
+        # Get recent 1-hour data for 1 day
+        df = self.ibkr.get_historical_data(contract, duration="3 D", barSize="1 hour")
         
         if df.empty:
             raise ValueError("No historical data received")
@@ -48,9 +49,16 @@ class USDJPYTradingSystem:
         # Add technical indicators
         df = self.indicators.add_all_indicators(df)
         
-        # Add additional features
+        # Add additional features (matching data_processor.py)
         df['price_change'] = df['close'].pct_change()
-        df['volatility'] = df['price_change'].rolling(window=12).std()
+        df['volatility'] = df['price_change'].rolling(12).std()
+        df['rsi_momentum'] = df['rsi'].diff()
+        df['close_lag_1'] = df['close'].shift(1)
+        df['close_lag_2'] = df['close'].shift(2)
+        df['close_lag_3'] = df['close'].shift(3)
+        df['obv'] = (np.sign(df['close'].diff()) * df['volume']).fillna(0).cumsum()
+        df['rolling_std_7'] = df['close'].rolling(window=7).std()
+        df['rolling_std_21'] = df['close'].rolling(window=21).std()
         
         return df.dropna()
     
@@ -58,18 +66,26 @@ class USDJPYTradingSystem:
         """Prepare data for model prediction"""
         feature_cols = [
             'open', 'high', 'low', 'close', 'volume',
-            'rsi', 'macd', 'macd_signal', 'bb_upper', 'bb_middle', 'bb_lower',
-            'atr', 'bb_position', 'price_change', 'volatility'
+            'rsi', 'macd', 'macd_signal', 
+            'bb_upper', 'bb_middle', 'bb_lower',
+            'atr', 'bb_position',
+            'price_change', 'volatility', 'rsi_momentum',
+            'close_lag_1', 'close_lag_2', 'close_lag_3',
+            'obv',
+            'rolling_std_7', 'rolling_std_21'
         ]
         
         # Get last SEQUENCE_LENGTH periods
         features = df[feature_cols].tail(SEQUENCE_LENGTH).values
         
         # Normalize using saved scaler
-        features_scaled = self.trainer.scaler.transform(features.reshape(1, -1))
-        features_scaled = features_scaled.reshape(1, SEQUENCE_LENGTH, len(feature_cols))
+        # The scaler expects (n_samples, n_features), where n_samples is SEQUENCE_LENGTH
+        features_scaled = self.trainer.scaler.transform(features)
         
-        return torch.FloatTensor(features_scaled)
+        # Reshape back for LSTM: (1, sequence_length, num_features)
+        features_scaled_reshaped = features_scaled.reshape(1, SEQUENCE_LENGTH, len(feature_cols))
+        
+        return torch.FloatTensor(features_scaled_reshaped)
     
     def generate_signal(self):
         """Generate trading signal from AI model"""
@@ -79,7 +95,7 @@ class USDJPYTradingSystem:
             
             if len(df) < SEQUENCE_LENGTH:
                 print("Insufficient data for prediction")
-                return None, None, None
+                return None, None, None, None, None
             
             # Prepare input for model
             model_input = self.prepare_model_input(df)
@@ -100,7 +116,7 @@ class USDJPYTradingSystem:
             return signal, confidence, current_price, atr_value, df
             
         except Exception as e:
-            print(f"Error generating signal: {e}")
+            print(f"Error generating signal: {type(e).__name__}: {e}")
             return None, None, None, None, None
     
     def should_trade(self, signal, confidence):
@@ -177,6 +193,7 @@ class USDJPYTradingSystem:
             print("\nTrading system stopped by user")
         except Exception as e:
             print(f"Trading system error: {e}")
+            traceback.print_exc() # Print full traceback
         finally:
             if self.ibkr.connected:
                 self.ibkr.disconnect()

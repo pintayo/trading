@@ -25,8 +25,8 @@ class ContinuousLearningSystem:
     def load_current_model(self):
         """Load your existing 52% model"""
         try:
-            self.model.load_state_dict(torch.load("models/usdjpy_model.pth"))
-            with open("models/scaler.pkl", 'rb') as f:
+            self.model.load_state_dict(torch.load("models/simple_usdjpy_model.pth"))
+            with open("models/simple_scaler.pkl", 'rb') as f:
                 self.trainer.scaler = pickle.load(f)
             print("✅ Loaded existing model (52% accuracy)")
         except:
