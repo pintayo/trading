@@ -11,6 +11,16 @@ TIMEFRAME = "4h"
 SEQUENCE_LENGTH = 24  # 4 days of 4-hour candles
 LOOKBACK_YEARS = 2
 
+# Advanced Data Collector Lookback Years
+LOOKBACK_YEARS_ADVANCED = {
+    "1h": 2,  # Max 2 years for 1-hour data from Yahoo Finance
+    "4h": 2,  # Max 2 years for 4-hour data from Yahoo Finance
+    "1d": 5   # 5 years for daily data
+}
+
+# Alpha Vantage API Key (Get yours from https://www.alphavantage.co/support/#api-key)
+ALPHA_VANTAGE_API_KEY = "9ZVTND5WHX5DRDK2"
+
 # Risk Management
 MAX_POSITION_SIZE = 0.02  # 2% of account per trade
 STOP_LOSS_ATR_MULTIPLIER = 1.5

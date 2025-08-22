@@ -7,16 +7,17 @@ import pandas as pd
 from datetime import datetime
 import time
 from config.trading_config import *
-from trade_logger import TradeLogger
-from risk_manager import RiskManager
+from .trade_logger import TradeLogger
+from .risk_manager import RiskManager
 
 class IBKRTrading:
-    def __init__(self, account_balance=1000, paper_trading=True):
+    def __init__(self, account_balance=1000, paper_trading=True, pair_config=None):
         self.ib = IB()
         self.paper_trading = paper_trading
         self.trade_logger = TradeLogger()
         self.risk_manager = RiskManager(account_balance)
         self.connected = False
+        self.pair_config = pair_config
         
     def connect(self, host='127.0.0.1', port=7497, clientId=1):
         """Connect to IBKR TWS/Gateway"""
@@ -32,8 +33,10 @@ class IBKRTrading:
             return False
     
     def create_forex_contract(self):
-        """Create forex contract for USD/JPY using config values"""
-        contract = Forex(symbol=IBKR_SYMBOL, currency=IBKR_CURRENCY, exchange=IBKR_EXCHANGE)
+        """Create forex contract using pair_config values"""
+        if not self.pair_config:
+            raise ValueError("pair_config is not set")
+        contract = Forex(symbol=self.pair_config['ibkr_symbol'], currency=self.pair_config['ibkr_currency'], exchange=self.pair_config['ibkr_exchange'])
         print(f"DEBUG: Created contract: {contract}")
         return contract
     
@@ -157,7 +160,7 @@ class IBKRTrading:
         # Create trade data for logging
         trade_data = {
             'timestamp': datetime.now().isoformat(),
-            'symbol': 'USDJPY',
+            'symbol': self.pair_config['name'],
             'direction': direction,
             'entry_price': current_price,
             'position_size': position_size,

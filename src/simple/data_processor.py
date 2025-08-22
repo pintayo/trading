@@ -5,20 +5,37 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(
 import pandas as pd
 import numpy as np
 import sqlite3
-from technical_indicators import TechnicalIndicators
-from config.model_config import TARGET_PERCENT_THRESHOLD, TARGET_FUTURE_CANDLES
+from .technical_indicators import TechnicalIndicators
+from config.model_config import SIMPLE_CONFIG, ADVANCED_CONFIG
+from config.trading_config import TIMEFRAME
 
 class DataProcessor:
     """Simplified data processor for profitable 52%+ model"""
     
-    def __init__(self, db_path="data/usdjpy_data.db"):
-        self.db_path = db_path
+    def __init__(self, symbol=None, model_type="simple", interval=TIMEFRAME):
+        self.model_type = model_type
+        self.interval = interval
+        if model_type == "simple":
+            if symbol:
+                self.db_path = f"data/{symbol.replace('=X', '').lower()}_data.db"
+            else:
+                self.db_path = "data/usdjpy_data.db"
+        elif model_type == "advanced":
+            self.db_path = "data/massive_forex_data.db"
+            self.symbol = symbol # Store symbol for filtering
+
         self.indicators = TechnicalIndicators()
     
     def load_data(self):
         """Load and clean price data - simplified approach"""
         conn = sqlite3.connect(self.db_path)
-        df = pd.read_sql_query("SELECT * FROM price_data", conn)
+        if self.model_type == "simple":
+            df = pd.read_sql_query("SELECT * FROM price_data", conn)
+        elif self.model_type == "advanced":
+            # Filter by symbol and interval for advanced model
+            df = pd.read_sql_query(f"SELECT * FROM forex_data WHERE symbol='{self.symbol}' AND interval='{self.interval}'", conn)
+            # Drop symbol and interval columns as they are not features
+            df = df.drop(columns=['symbol', 'interval'])
         conn.close()
         
         # Handle datetime column (most common cases)
@@ -44,12 +61,22 @@ class DataProcessor:
         df = self.indicators.add_all_indicators(df)
         
         # --- NEW TARGET VARIABLE DEFINITION ---
+        # Use config based on model type
+        if self.model_type == "simple":
+            target_threshold = SIMPLE_CONFIG['target_percent_threshold']
+            target_future_candles = SIMPLE_CONFIG['target_future_candles']
+            feature_cols = SIMPLE_CONFIG['feature_columns']
+        elif self.model_type == "advanced":
+            target_threshold = ADVANCED_CONFIG['target_percent_threshold']
+            target_future_candles = ADVANCED_CONFIG['target_future_candles']
+            feature_cols = ADVANCED_CONFIG['feature_columns']
+
         # Calculate future close price
-        df['future_close'] = df['close'].shift(-TARGET_FUTURE_CANDLES)
+        df['future_close'] = df['close'].shift(-target_future_candles)
         
         # Define thresholds
-        upper_bound = df['close'] * (1 + TARGET_PERCENT_THRESHOLD)
-        lower_bound = df['close'] * (1 - TARGET_PERCENT_THRESHOLD)
+        upper_bound = df['close'] * (1 + target_threshold)
+        lower_bound = df['close'] * (1 - target_threshold)
         
         # Assign target: 1 for up, 0 for down
         df['target'] = np.nan # Initialize with NaN
@@ -84,24 +111,6 @@ class DataProcessor:
         df = df.dropna()
         
         # SIMPLE FEATURE SET (now with more features)
-        feature_cols = [
-            # Price data (5 features)
-            'open', 'high', 'low', 'close', 'volume',
-            
-            # Core technical indicators (8 features)
-            'rsi', 'macd', 'macd_signal', 
-            'bb_upper', 'bb_middle', 'bb_lower',
-            'atr', 'bb_position',
-            
-            # Simple derived features (3 features)
-            'price_change', 'volatility', 'rsi_momentum',
-            
-            # --- NEW FEATURES ADDED ---
-            'close_lag_1', 'close_lag_2', 'close_lag_3',
-            'obv',
-            'rolling_std_7', 'rolling_std_21'
-            # --- END NEW FEATURES ---
-        ]
         
         # Verify all features exist
         missing_features = [col for col in feature_cols if col not in df.columns]
@@ -138,3 +147,4 @@ if __name__ == "__main__":
     # Process training data
     features, targets = processor.prepare_training_data()
     print("\n🚀 Simple data processing complete!")
+

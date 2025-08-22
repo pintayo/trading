@@ -11,23 +11,23 @@ from sklearn.ensemble import VotingClassifier
 from sklearn.metrics import accuracy_score, classification_report
 import xgboost as xgb
 
-from attention_lstm import AttentionLSTM, CNNLSTMModel
-from advanced_features import AdvancedFeatureEngineering
+from .attention_lstm import AttentionLSTM, CNNLSTMModel
+from .advanced_features import AdvancedFeatureEngineering
 from config.model_config import *
 
 class EnsembleForexModel:
     """Research-backed ensemble model targeting 70% accuracy"""
     
     def __init__(self):
-        self.attention_lstm = AttentionLSTM()
-        self.cnn_lstm = CNNLSTMModel()
+        self.attention_lstm = None
+        self.cnn_lstm = None
         self.xgboost = xgb.XGBClassifier(**XGBOOST_PARAMS)
         
         self.feature_engineer = AdvancedFeatureEngineering()
         self.selected_features = None
         self.is_trained = False
         
-    def prepare_lstm_data(self, features, sequence_length=SEQUENCE_LENGTH):
+    def prepare_lstm_data(self, features, sequence_length):
         """Prepare sequential data for LSTM models"""
         X, y = [], []
         for i in range(len(features) - sequence_length):
@@ -44,7 +44,7 @@ class EnsembleForexModel:
             X.append(flat_features)
         return np.array(X)
     
-    def train(self, df, target_col='target'):
+    def train(self, df, target_col='target', paths=None):
         """Train the complete ensemble model"""
         print("Starting ensemble model training...")
         
@@ -56,17 +56,24 @@ class EnsembleForexModel:
             df_features, df_features[target_col]
         )
         
+        # Get number of features
+        num_features = len(self.selected_features)
+        
+        # Initialize models with dynamic input size
+        self.attention_lstm = AttentionLSTM(input_size=num_features)
+        self.cnn_lstm = CNNLSTMModel(input_size=num_features)
+        
         # Prepare data
         features = features_df.values
         targets = df_features[target_col].values
         
         # Split data
-        train_size = int(len(features) * TRAIN_SPLIT)
-        val_size = int(len(features) * VALIDATION_SPLIT)
+        train_size = int(len(features) * ADVANCED_CONFIG['train_split'])
+        val_size = int(len(features) * ADVANCED_CONFIG['validation_split'])
         
         # LSTM data preparation
-        lstm_X = self.prepare_lstm_data(features)
-        lstm_y = targets[SEQUENCE_LENGTH:]
+        lstm_X = self.prepare_lstm_data(features, sequence_length=ADVANCED_CONFIG['sequence_length'])
+        lstm_y = targets[ADVANCED_CONFIG['sequence_length']:]
         
         # XGBoost data preparation  
         xgb_X = self.prepare_xgboost_data(features)
@@ -80,8 +87,8 @@ class EnsembleForexModel:
         xgb_y = xgb_y[:min_length]
         
         # Train splits
-        train_end = int(min_length * TRAIN_SPLIT)
-        val_end = int(min_length * (TRAIN_SPLIT + VALIDATION_SPLIT))
+        train_end = int(min_length * ADVANCED_CONFIG['train_split'])
+        val_end = int(min_length * (ADVANCED_CONFIG['train_split'] + ADVANCED_CONFIG['validation_split']))
         
         # Train Attention LSTM
         print("Training Attention LSTM...")
@@ -89,7 +96,7 @@ class EnsembleForexModel:
             self.attention_lstm, 
             lstm_X[:train_end], lstm_y[:train_end],
             lstm_X[train_end:val_end], lstm_y[train_end:val_end],
-            ATTENTION_PATH
+            paths['attention_path']
         )
         
         # Train CNN-LSTM
@@ -98,15 +105,17 @@ class EnsembleForexModel:
             self.cnn_lstm,
             lstm_X[:train_end], lstm_y[:train_end],
             lstm_X[train_end:val_end], lstm_y[train_end:val_end], 
-            CNN_PATH
+            paths['cnn_path']
         )
         
         # Train XGBoost
         print("Training XGBoost...")
-        self.xgboost.fit(xgb_X[:train_end], xgb_y[:train_end])
+        self.xgboost.fit(xgb_X[:train_end], xgb_y[:train_end], 
+                         eval_set=[(xgb_X[train_end:val_end], xgb_y[train_end:val_end])], 
+                         verbose=False)
         
         # Save XGBoost
-        with open(XGBOOST_PATH, 'wb') as f:
+        with open(paths['xgboost_path'], 'wb') as f:
             pickle.dump(self.xgboost, f)
         
         # Evaluate ensemble
@@ -117,21 +126,22 @@ class EnsembleForexModel:
         
     def _train_lstm_model(self, model, X_train, y_train, X_val, y_val, save_path):
         """Train individual LSTM model"""
+        num_features = len(self.selected_features)
         # Convert to tensors
-        X_train = torch.FloatTensor(X_train)
+        X_train = torch.FloatTensor(X_train).reshape(-1, ADVANCED_CONFIG['sequence_length'], num_features)
         y_train = torch.FloatTensor(y_train)
-        X_val = torch.FloatTensor(X_val)
+        X_val = torch.FloatTensor(X_val).reshape(-1, ADVANCED_CONFIG['sequence_length'], num_features)
         y_val = torch.FloatTensor(y_val)
         
-        optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
+        optimizer = torch.optim.Adam(model.parameters(), lr=ADVANCED_CONFIG['learning_rate'], weight_decay=ADVANCED_CONFIG['weight_decay'])
         criterion = nn.BCELoss()
         
         best_val_loss = float('inf')
-        patience = 20
+        patience = ADVANCED_CONFIG['patience']
         patience_counter = 0
         
         model.train()
-        for epoch in range(EPOCHS):
+        for epoch in range(ADVANCED_CONFIG['epochs']):
             optimizer.zero_grad()
             
             if isinstance(model, AttentionLSTM):
@@ -141,6 +151,7 @@ class EnsembleForexModel:
                 
             loss = criterion(outputs.squeeze(), y_train)
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=ADVANCED_CONFIG['gradient_clipping']) # Gradient clipping
             optimizer.step()
             
             # Validation
@@ -164,11 +175,16 @@ class EnsembleForexModel:
                         print(f"Early stopping at epoch {epoch}")
                         break
                         
-                print(f'Epoch [{epoch}/{EPOCHS}], Loss: {loss.item():.4f}, Val Loss: {val_loss.item():.4f}')
+                print(f'Epoch [{epoch}/{ADVANCED_CONFIG["epochs"]}], Loss: {loss.item():.4f}, Val Loss: {val_loss.item():.4f}')
                 model.train()
     
     def _evaluate_ensemble(self, lstm_X, xgb_X, y_true):
         """Evaluate ensemble performance"""
+        num_features = len(self.selected_features)
+        # Ensure lstm_X is 3D for prediction
+        if lstm_X.ndim == 2:
+            lstm_X = lstm_X.reshape(-1, ADVANCED_CONFIG['sequence_length'], num_features)
+
         # Get predictions from all models
         predictions = self.predict(lstm_X, xgb_X, return_individual=True)
         
@@ -219,7 +235,7 @@ class EnsembleForexModel:
         else:
             return ensemble_pred
     
-    def save_model(self):
+    def save_model(self, paths):
         """Save complete ensemble model"""
         model_data = {
             'selected_features': self.selected_features,
@@ -227,24 +243,29 @@ class EnsembleForexModel:
             'is_trained': self.is_trained
         }
         
-        with open(ENSEMBLE_PATH, 'wb') as f:
+        with open(paths['model_path'], 'wb') as f:
             pickle.dump(model_data, f)
         
         print("Ensemble model saved successfully!")
     
-    def load_model(self):
+    def load_model(self, paths):
         """Load complete ensemble model"""
         # Load model states
-        self.attention_lstm.load_state_dict(torch.load(ATTENTION_PATH))
-        self.cnn_lstm.load_state_dict(torch.load(CNN_PATH))
-        
-        with open(XGBOOST_PATH, 'rb') as f:
-            self.xgboost = pickle.load(f)
-            
-        with open(ENSEMBLE_PATH, 'rb') as f:
+        with open(paths['model_path'], 'rb') as f:
             model_data = pickle.load(f)
             self.selected_features = model_data['selected_features']
             self.feature_engineer = model_data['feature_engineer']
             self.is_trained = model_data['is_trained']
+        
+        num_features = len(self.selected_features)
+        self.attention_lstm = AttentionLSTM(input_size=num_features)
+        self.cnn_lstm = CNNLSTMModel(input_size=num_features)
+
+        self.attention_lstm.load_state_dict(torch.load(paths['attention_path']))
+        self.cnn_lstm.load_state_dict(torch.load(paths['cnn_path']))
+        
+        with open(paths['xgboost_path'], 'rb') as f:
+            self.xgboost = pickle.load(f)
+            
         
         print("Ensemble model loaded successfully!")

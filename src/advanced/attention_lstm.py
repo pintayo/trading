@@ -34,8 +34,8 @@ class AttentionMechanism(nn.Module):
 class AttentionLSTM(nn.Module):
     """Attention-based LSTM - Proven to achieve 65%+ accuracy"""
     
-    def __init__(self, input_size=INPUT_SIZE, hidden_size=HIDDEN_SIZE, 
-                 num_layers=NUM_LAYERS, dropout=DROPOUT):
+    def __init__(self, input_size, hidden_size=ADVANCED_CONFIG['hidden_size'], 
+                 num_layers=ADVANCED_CONFIG['num_layers'], dropout=ADVANCED_CONFIG['dropout']):
         super(AttentionLSTM, self).__init__()
         
         self.hidden_size = hidden_size
@@ -83,30 +83,30 @@ class AttentionLSTM(nn.Module):
 class CNNLSTMModel(nn.Module):
     """CNN-LSTM hybrid for local pattern detection"""
     
-    def __init__(self, input_size=INPUT_SIZE, sequence_length=SEQUENCE_LENGTH):
+    def __init__(self, input_size, sequence_length=ADVANCED_CONFIG['sequence_length']):
         super(CNNLSTMModel, self).__init__()
         
-        # CNN layers for local pattern extraction - ALL FIXED
-        self.conv1 = nn.Conv1d(input_size, CNN_FILTERS[0], CNN_KERNEL_SIZE, padding=1)
-        self.conv2 = nn.Conv1d(CNN_FILTERS[0], CNN_FILTERS[1], CNN_KERNEL_SIZE, padding=1)
-        self.conv3 = nn.Conv1d(CNN_FILTERS[1], CNN_FILTERS[2], CNN_KERNEL_SIZE, padding=1)
+        # CNN layers for local pattern extraction
+        self.conv1 = nn.Conv1d(input_size, CNN_FILTERS[0], CNN_KERNEL_SIZES[0], padding=1)
+        self.conv2 = nn.Conv1d(CNN_FILTERS[0], CNN_FILTERS[1], CNN_KERNEL_SIZES[0], padding=1)
+        self.conv3 = nn.Conv1d(CNN_FILTERS[1], CNN_FILTERS[2], CNN_KERNEL_SIZES[0], padding=1)
 
         
         self.pool = nn.MaxPool1d(CNN_POOL_SIZE)
-        self.dropout = nn.Dropout(0.3)
+        self.dropout = nn.Dropout(CNN_DROPOUT)
         
         # Calculate LSTM input size after convolutions
-        conv_output_size = CNN_FILTERS[2]  # This is 128
+        conv_output_size = CNN_FILTERS[2]
         
         # LSTM layers
-        self.lstm = nn.LSTM(conv_output_size, 64, 2, batch_first=True, dropout=0.3)
+        self.lstm = nn.LSTM(conv_output_size, ADVANCED_CONFIG['hidden_size'], ADVANCED_CONFIG['num_layers'], batch_first=True, dropout=ADVANCED_CONFIG['dropout'])
         
         # Final classifier
         self.classifier = nn.Sequential(
-            nn.Linear(64, 32),
+            nn.Linear(ADVANCED_CONFIG['hidden_size'], ADVANCED_CONFIG['hidden_size'] // 2),
             nn.ReLU(),
-            nn.Dropout(0.3),
-            nn.Linear(32, 1),
+            nn.Dropout(ADVANCED_CONFIG['dropout']),
+            nn.Linear(ADVANCED_CONFIG['hidden_size'] // 2, 1),
             nn.Sigmoid()
         )
         

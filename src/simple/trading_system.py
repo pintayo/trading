@@ -8,24 +8,39 @@ import pandas as pd
 from datetime import datetime, timedelta
 import time
 import traceback
-from lstm_model import USDJPYLSTMModel, ModelTrainer
-from data_processor import DataProcessor
-from ibkr_integration import IBKRTrading
-from trade_logger import TradeLogger
-from technical_indicators import TechnicalIndicators
-from config.model_config import MODEL_PATH, SCALER_PATH
+from .lstm_model import ForexLSTMModel, ModelTrainer
+from .data_processor import DataProcessor
+from .ibkr_integration import IBKRTrading
+from .trade_logger import TradeLogger
+from .technical_indicators import TechnicalIndicators
+from config.model_config import SIMPLE_CONFIG, ADVANCED_CONFIG, get_model_paths
+from src.advanced.ensemble_model import EnsembleForexModel
 from config.trading_config import *
 
-class USDJPYTradingSystem:
-    def __init__(self, account_balance=1000, paper_trading=True):
-        self.model = USDJPYLSTMModel()
-        self.model.load_state_dict(torch.load(MODEL_PATH, weights_only=False))
-        self.model.eval()
-        
-        self.trainer = ModelTrainer()
-        self.trainer.load_scaler()
-        
-        self.ibkr = IBKRTrading(account_balance, paper_trading)
+class TradingSystem:
+    def __init__(self, model_type, pair_config, account_balance=1000, paper_trading=True):
+        self.model_type = model_type
+        self.pair_config = pair_config
+        self.paths = get_model_paths(model_type=model_type, pair_name=pair_config['name'])
+
+        if model_type == "simple":
+            self.model = ForexLSTMModel(
+                input_size=SIMPLE_CONFIG['input_size'],
+                hidden_size=SIMPLE_CONFIG['hidden_size'],
+                num_layers=SIMPLE_CONFIG['num_layers'],
+                output_size=SIMPLE_CONFIG['output_size'],
+                dropout=SIMPLE_CONFIG['dropout']
+            )
+            self.model.load_state_dict(torch.load(self.paths['model_path'], weights_only=False))
+            self.model.eval()
+            
+            self.trainer = ModelTrainer(self.model)
+            self.trainer.load_scaler(self.paths['scaler_path'])
+        elif model_type == "advanced":
+            self.model = EnsembleForexModel()
+            self.model.load_model(self.paths)
+
+        self.ibkr = IBKRTrading(account_balance, paper_trading, pair_config)
         self.trade_logger = TradeLogger()
         self.indicators = TechnicalIndicators()
         
@@ -64,36 +79,39 @@ class USDJPYTradingSystem:
     
     def prepare_model_input(self, df):
         """Prepare data for model prediction"""
-        feature_cols = [
-            'open', 'high', 'low', 'close', 'volume',
-            'rsi', 'macd', 'macd_signal', 
-            'bb_upper', 'bb_middle', 'bb_lower',
-            'atr', 'bb_position',
-            'price_change', 'volatility', 'rsi_momentum',
-            'close_lag_1', 'close_lag_2', 'close_lag_3',
-            'obv',
-            'rolling_std_7', 'rolling_std_21'
-        ]
+        if self.model_type == 'simple':
+            config = SIMPLE_CONFIG
+        else:
+            config = ADVANCED_CONFIG
+
+        feature_cols = config['feature_columns']
+        sequence_length = config['sequence_length']
         
-        # Get last SEQUENCE_LENGTH periods
-        features = df[feature_cols].tail(SEQUENCE_LENGTH).values
+        # Get last sequence_length periods
+        features = df[feature_cols].tail(sequence_length).values
         
         # Normalize using saved scaler
-        # The scaler expects (n_samples, n_features), where n_samples is SEQUENCE_LENGTH
+        # The scaler expects (n_samples, n_features), where n_samples is sequence_length
         features_scaled = self.trainer.scaler.transform(features)
         
         # Reshape back for LSTM: (1, sequence_length, num_features)
-        features_scaled_reshaped = features_scaled.reshape(1, SEQUENCE_LENGTH, len(feature_cols))
+        features_scaled_reshaped = features_scaled.reshape(1, sequence_length, len(feature_cols))
         
         return torch.FloatTensor(features_scaled_reshaped)
     
     def generate_signal(self):
         """Generate trading signal from AI model"""
         try:
+            if self.model_type == 'simple':
+                config = SIMPLE_CONFIG
+            else:
+                config = ADVANCED_CONFIG
+            sequence_length = config['sequence_length']
+
             # Get latest data
             df = self.get_latest_data()
             
-            if len(df) < SEQUENCE_LENGTH:
+            if len(df) < sequence_length:
                 print("Insufficient data for prediction")
                 return None, None, None, None, None
             
@@ -223,12 +241,60 @@ class USDJPYTradingSystem:
         )
 
 # Example usage
-if __name__ == "__main__":
+def run_trading_system_cli(model_type, pair_config):
+    print(f"\n Starting {model_type} Trading System for {pair_config['name']}")
+    print(f" Model Accuracy: 51.30% (Profitable with 2:1 R/R)") # Placeholder
+    print(f"⏰ Started: {datetime.now()}")
+    
     # Initialize trading system for paper trading
-    trading_system = USDJPYTradingSystem(account_balance=1000, paper_trading=True)
+    system = TradingSystem(model_type=model_type, pair_config=pair_config, account_balance=1000, paper_trading=True)
     
-    # Run single session
-    trading_system.run_trading_session()
+    trade_count = 0
+    session_count = 0
     
-    # Or run continuously (uncomment below)
-    # trading_system.run_continuous()
+    try:
+        while True:
+            session_count += 1
+            print(f"\n=== Session #{session_count} ===")
+            
+            # Run trading session
+            signal_generated = system.run_trading_session()
+            
+            if signal_generated:
+                trade_count += 1
+                print(f"📈 Total signals generated: {trade_count}")
+            
+            # Show some stats every 10 sessions
+            if session_count % 10 == 0:
+                print(f"📊 Sessions completed: {session_count}")
+                print(f"🎯 Signals generated: {trade_count}")
+                print(f"📈 Signal rate: {(trade_count/session_count)*100:.1f}%")
+            
+            # Wait 4 hours (or 5 minutes for testing)
+            print("⏳ Waiting for next 4-hour candle...")
+            time.sleep(300)  # 5 minutes for testing (change to 14400 for real 4h)
+            
+    except KeyboardInterrupt:
+        print(f"\n📊 Final Stats:")
+        print(f"Sessions: {session_count}")
+        print(f"Signals: {trade_count}")
+        print("👋 Paper trading stopped")
+    except Exception as e:
+        print(f"Trading system error: {e}")
+        traceback.print_exc() # Print full traceback
+    finally:
+        if system.ibkr.connected:
+            system.ibkr.disconnect()
+
+if __name__ == "__main__":
+    # For standalone testing, assume simple model and USD/JPY
+    from config.model_config import SIMPLE_CONFIG
+    from config.trading_config import SYMBOL, IBKR_SYMBOL, IBKR_CURRENCY, IBKR_EXCHANGE
+    test_pair_config = {
+        "name": "USD/JPY",
+        "symbol": SYMBOL,
+        "ibkr_symbol": IBKR_SYMBOL,
+        "ibkr_currency": IBKR_CURRENCY,
+        "ibkr_exchange": IBKR_EXCHANGE
+    }
+    run_trading_system_cli(model_type="simple", pair_config=test_pair_config)

@@ -9,16 +9,15 @@ from sklearn.preprocessing import MinMaxScaler
 import pickle
 from config.model_config import *
 
-class USDJPYLSTMModel(nn.Module):
-    def __init__(self, input_size=INPUT_SIZE, hidden_size=HIDDEN_SIZE, 
-                 num_layers=NUM_LAYERS, output_size=OUTPUT_SIZE):
-        super(USDJPYLSTMModel, self).__init__()
+class ForexLSTMModel(nn.Module):
+    def __init__(self, input_size, hidden_size, num_layers, output_size, dropout):
+        super(ForexLSTMModel, self).__init__()
         self.hidden_size = hidden_size
         self.num_layers = num_layers
         
         # IMPROVED ARCHITECTURE
         self.lstm = nn.LSTM(input_size, hidden_size, num_layers, 
-                           batch_first=True, dropout=DROPOUT, bidirectional=True)
+                           batch_first=True, dropout=dropout, bidirectional=True)
         
         # Bidirectional doubles the output size
         lstm_output_size = hidden_size * 2
@@ -27,10 +26,10 @@ class USDJPYLSTMModel(nn.Module):
         self.classifier = nn.Sequential(
             nn.Linear(lstm_output_size, hidden_size),
             nn.ReLU(),
-            nn.Dropout(DROPOUT),
+            nn.Dropout(dropout),
             nn.Linear(hidden_size, hidden_size // 2),
             nn.ReLU(), 
-            nn.Dropout(DROPOUT),
+            nn.Dropout(dropout),
             nn.Linear(hidden_size // 2, output_size),
             nn.Sigmoid()
         )
@@ -49,24 +48,24 @@ class USDJPYLSTMModel(nn.Module):
         return output
 
 class ModelTrainer:
-    def __init__(self, model=None, learning_rate=LEARNING_RATE):
-        self.model = model or USDJPYLSTMModel()
+    def __init__(self, model, learning_rate):
+        self.model = model
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=learning_rate)
         self.criterion = nn.BCELoss()
         self.scaler = MinMaxScaler()
         
-    def prepare_sequences(self, features, targets, sequence_length=SEQUENCE_LENGTH):
+    def prepare_sequences(self, features, targets, sequence_length):
         X, y = [], []
         for i in range(len(features) - sequence_length):
             X.append(features[i:(i + sequence_length)])
             y.append(targets[i + sequence_length])
         return np.array(X), np.array(y)
     
-    def split_data(self, X, y):
+    def split_data(self, X, y, train_split, validation_split, test_split):
         """Split data into train/validation/test sets"""
         n = len(X)
-        train_end = int(n * TRAIN_SPLIT)
-        val_end = int(n * (TRAIN_SPLIT + VALIDATION_SPLIT))
+        train_end = int(n * train_split)
+        val_end = int(n * (train_split + validation_split))
         
         X_train, y_train = X[:train_end], y[:train_end]
         X_val, y_val = X[train_end:val_end], y[train_end:val_end]
@@ -74,7 +73,7 @@ class ModelTrainer:
         
         return (X_train, y_train), (X_val, y_val), (X_test, y_test)
     
-    def train(self, X_train, y_train, X_val=None, y_val=None, epochs=EPOCHS):
+    def train(self, X_train, y_train, X_val=None, y_val=None, epochs=None, model_path=None, patience=None):
         self.model.train()
         best_val_loss = float('inf')
         patience_counter = 0 # Initialize patience counter
@@ -94,12 +93,12 @@ class ModelTrainer:
                     
                     if val_loss < best_val_loss:
                         best_val_loss = val_loss
-                        torch.save(self.model.state_dict(), MODEL_PATH)
+                        torch.save(self.model.state_dict(), model_path)
                         patience_counter = 0 # Reset patience if validation loss improves
                     else:
                         patience_counter += 1 # Increment patience if no improvement
                         
-                    if patience_counter >= PATIENCE: # Check for early stopping
+                    if patience_counter >= patience: # Check for early stopping
                         print(f"Early stopping at epoch {epoch} due to no improvement in validation loss.")
                         break
                         
@@ -109,10 +108,10 @@ class ModelTrainer:
             elif epoch % 20 == 0:
                 print(f'Epoch [{epoch}/{epochs}], Loss: {loss.item():.4f}')
     
-    def save_scaler(self):
-        with open(SCALER_PATH, 'wb') as f:
+    def save_scaler(self, scaler_path=None):
+        with open(scaler_path, 'wb') as f:
             pickle.dump(self.scaler, f)
     
-    def load_scaler(self):
-        with open(SCALER_PATH, 'rb') as f:
+    def load_scaler(self, scaler_path=None):
+        with open(scaler_path, 'rb') as f:
             self.scaler = pickle.load(f)

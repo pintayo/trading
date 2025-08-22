@@ -6,10 +6,10 @@ import yfinance as yf
 import pandas as pd
 from datetime import datetime, timedelta
 import sqlite3
-from config.trading_config import SYMBOL, LOOKBACK_YEARS, TIMEFRAME
+from config.trading_config import LOOKBACK_YEARS # Keep LOOKBACK_YEARS
 
-class USDJPYDataCollector:
-    def __init__(self, db_path="data/usdjpy_data.db"):
+class ForexDataCollector:
+    def __init__(self, db_path="data/forex_data.db"):
         self.db_path = db_path
         self.setup_database()
     
@@ -27,16 +27,16 @@ class USDJPYDataCollector:
         ''')
         conn.close()
     
-    def download_historical_data(self, years=LOOKBACK_YEARS):
-        print(f"Downloading {years} years of {SYMBOL} {TIMEFRAME} data...")
+    def download_historical_data(self, symbol, interval, years=LOOKBACK_YEARS):
+        print(f"Downloading {years} years of {symbol} {interval} data...")
         
         end_date = datetime.now()
         start_date = end_date - timedelta(days=365 * years)
         
-        data = yf.download(SYMBOL, start=start_date, end=end_date, interval=TIMEFRAME)
+        data = yf.download(symbol, start=start_date, end=end_date, interval=interval, auto_adjust=True)
         
         if data.empty:
-            raise ValueError(f"No data downloaded for {SYMBOL}")
+            raise ValueError(f"No data downloaded for {symbol}")
         
         # Flatten column names if multi-level
         if isinstance(data.columns, pd.MultiIndex):
@@ -56,5 +56,6 @@ class USDJPYDataCollector:
         print("Data saved to database")
 
 if __name__ == "__main__":
-    collector = USDJPYDataCollector()
-    collector.download_historical_data()
+    from config.trading_config import SYMBOL, TIMEFRAME # Import for standalone run
+    collector = ForexDataCollector()
+    collector.download_historical_data(symbol=SYMBOL, interval=TIMEFRAME)

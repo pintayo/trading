@@ -9,6 +9,8 @@ import sqlite3
 import requests
 import time
 
+from config.trading_config import LOOKBACK_YEARS_ADVANCED
+
 class MassiveDataCollector:
     """Collect massive forex datasets for serious AI training"""
     
@@ -34,7 +36,7 @@ class MassiveDataCollector:
         conn.close()
         
     def download_multiple_pairs_multiple_timeframes(self):
-        """Download massive dataset: multiple pairs, multiple timeframes, 5+ years"""
+        """Download massive dataset: multiple pairs, multiple timeframes"""
         
         # Major forex pairs for cross-learning
         pairs = [
@@ -46,18 +48,16 @@ class MassiveDataCollector:
             "USDCHF=X",  # Safe haven
             "NZDUSD=X",  # Risk-on/off
             "EURJPY=X",  # Cross pair
+            "AUDNZD=X", # Added for AUD/NZD
+            "EURCHF=X"  # Added for EUR/CHF
         ]
         
         # Multiple timeframes for better patterns
         intervals = {
-            "1h": "1h",    # 43,800 samples per year
-            "4h": "4h",    # 10,950 samples per year  
-            "1d": "1d"     # 365 samples per year
+            "1d": "1d",
+            "4h": "4h",    
+            "1h": "1h"     
         }
-        
-        # 5 years of data
-        end_date = datetime.now()
-        start_date = end_date - timedelta(days=365 * 5)
         
         total_samples = 0
         
@@ -66,19 +66,24 @@ class MassiveDataCollector:
                 print(f"Downloading {pair} {interval_name} data...")
                 
                 try:
-                    data = yf.download(pair, start=start_date, end=end_date, interval=interval_code)
+                    years = LOOKBACK_YEARS_ADVANCED[interval_name]
+                    end_date = datetime.now()
+                    start_date = end_date - timedelta(days=365 * years)
+
+                    data = yf.download(pair, start=start_date, end=end_date, interval=interval_code, auto_adjust=True)
                     
                     if not data.empty:
-                        # Clean column names
                         if isinstance(data.columns, pd.MultiIndex):
                             data.columns = data.columns.get_level_values(0)
                         data.columns = data.columns.str.lower()
                         
-                        # Add metadata
+                        if 'date' in data.columns:
+                            data.rename(columns={'date': 'timestamp'}, inplace=True)
+                        data.index.name = 'timestamp'
+
                         data['symbol'] = pair
                         data['interval'] = interval_name
                         
-                        # Save to database
                         conn = sqlite3.connect(self.db_path)
                         data.to_sql('forex_data', conn, if_exists='append', index=True)
                         conn.close()
@@ -94,6 +99,7 @@ class MassiveDataCollector:
         
         print(f"\n🚀 MASSIVE DATASET COMPLETE: {total_samples:,} total samples!")
         return total_samples
+
     
     def get_alternative_data_sources(self):
         """Add economic indicators and sentiment data"""
